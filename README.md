@@ -153,7 +153,9 @@ Full matrix incl. PII class and dry-run flags: [docs/rbac-matrix.md](docs/rbac-m
 ## Local setup
 
 Requirements: Docker + Docker Compose. (For running tests/agents directly:
-Python 3.12+.)
+**Python 3.12 recommended** — `make install` then `make test`. If your default
+`python3` is a different version, point the Makefile at a 3.12 interpreter, e.g.
+`make test PY=.venv/bin/python`.)
 
 ```bash
 cp .env.example .env
