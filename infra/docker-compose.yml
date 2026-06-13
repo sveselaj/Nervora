@@ -1,0 +1,92 @@
+# Nervora — Secure MCP Gateway · local demo stack.
+#   docker compose -f infra/docker-compose.yml up --build
+#
+# Brings up: Postgres (audit + queue), the gateway API, the async worker,
+# an OpenTelemetry collector, Grafana, and the static admin console.
+name: nervora
+
+x-app-env: &app-env
+  APP_ENV: demo
+  DATABASE_URL: postgresql+psycopg://smg:smg@postgres:5432/smg
+  AUTH_MODE: dev
+  DEV_TOKEN_SIGNING_SECRET: dev-only-not-for-production-change-me
+  QUEUE_BACKEND: local
+  SERVICEBUS_QUEUE_NAME: tool-jobs
+  QUEUE_MAX_DELIVERY_COUNT: "5"
+  DATABRICKS_MODE: mock
+  OTEL_ENABLED: "true"
+  OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4317
+  OTEL_CONSOLE_FALLBACK: "true"
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: smg
+      POSTGRES_PASSWORD: smg
+      POSTGRES_DB: smg
+    ports: ["5432:5432"]
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U smg -d smg"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  gateway:
+    build:
+      context: ..
+      dockerfile: apps/mcp-gateway/Dockerfile
+    environment:
+      <<: *app-env
+      OTEL_SERVICE_NAME: mcp-gateway
+    ports: ["8000:8000"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  worker:
+    build:
+      context: ..
+      dockerfile: apps/worker/Dockerfile
+    environment:
+      <<: *app-env
+      OTEL_SERVICE_NAME: mcp-worker
+    depends_on:
+      postgres:
+        condition: service_healthy
+      gateway:
+        condition: service_started
+
+  otel-collector:
+    image: otel/opentelemetry-collector-contrib:0.103.1
+    command: ["--config=/etc/otel-collector.yaml"]
+    volumes:
+      - ./otel-collector.yaml:/etc/otel-collector.yaml:ro
+    ports:
+      - "4317:4317"   # OTLP gRPC
+      - "8889:8889"   # Prometheus metrics scrape
+
+  grafana:
+    image: grafana/grafana:11.1.0
+    environment:
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+      GF_AUTH_ANONYMOUS_ORG_ROLE: Admin
+      GF_SECURITY_ADMIN_PASSWORD: admin
+    ports: ["3000:3000"]
+    volumes:
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./grafana/dashboards:/var/lib/grafana/dashboards:ro
+
+  admin-web:
+    image: nginx:1.27-alpine
+    volumes:
+      - ../apps/admin-web:/usr/share/nginx/html:ro
+    ports: ["8080:80"]
+    depends_on:
+      gateway:
+        condition: service_started
+
+volumes:
+  pgdata:

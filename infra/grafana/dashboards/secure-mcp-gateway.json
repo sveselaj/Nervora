@@ -1,0 +1,59 @@
+{
+  "annotations": { "list": [] },
+  "editable": true,
+  "title": "Nervora — Secure MCP Gateway · Tool Execution",
+  "uid": "secure-mcp-gateway",
+  "schemaVersion": 39,
+  "version": 1,
+  "tags": ["mcp", "security", "ai-tools"],
+  "templating": { "list": [] },
+  "time": { "from": "now-1h", "to": "now" },
+  "panels": [
+    {
+      "type": "row",
+      "title": "Tool Execution Overview",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 0 }
+    },
+    {
+      "type": "timeseries",
+      "title": "Tool calls by decision (allowed / denied / dry_run / queued / executed / failed)",
+      "description": "Sourced from spans named tool.* exported to the collector. Wire a tracing backend (Tempo) or span-metrics connector to populate.",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 1 },
+      "datasource": { "type": "prometheus", "uid": "Prometheus" },
+      "targets": [
+        { "expr": "sum by (decision) (rate(tool_calls_total[5m]))", "legendFormat": "{{decision}}" }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Gateway tool execution latency (p50/p95)",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 1 },
+      "datasource": { "type": "prometheus", "uid": "Prometheus" },
+      "targets": [
+        { "expr": "histogram_quantile(0.50, sum(rate(tool_latency_ms_bucket[5m])) by (le))", "legendFormat": "p50" },
+        { "expr": "histogram_quantile(0.95, sum(rate(tool_latency_ms_bucket[5m])) by (le))", "legendFormat": "p95" }
+      ]
+    },
+    {
+      "type": "stat",
+      "title": "Denied calls (RBAC / policy)",
+      "gridPos": { "h": 6, "w": 8, "x": 0, "y": 9 },
+      "datasource": { "type": "prometheus", "uid": "Prometheus" },
+      "targets": [ { "expr": "sum(increase(tool_calls_total{decision=\"denied\"}[1h]))" } ]
+    },
+    {
+      "type": "stat",
+      "title": "Async jobs queued",
+      "gridPos": { "h": 6, "w": 8, "x": 8, "y": 9 },
+      "datasource": { "type": "prometheus", "uid": "Prometheus" },
+      "targets": [ { "expr": "sum(increase(tool_calls_total{decision=\"queued\"}[1h]))" } ]
+    },
+    {
+      "type": "stat",
+      "title": "Dead-letter jobs",
+      "gridPos": { "h": 6, "w": 8, "x": 16, "y": 9 },
+      "datasource": { "type": "prometheus", "uid": "Prometheus" },
+      "targets": [ { "expr": "sum(increase(jobs_dead_letter_total[1h]))" } ]
+    }
+  ]
+}

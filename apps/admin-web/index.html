@@ -1,0 +1,97 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Nervora — Secure MCP Gateway · Admin</title>
+  <style>
+    :root { --bg:#0d1117; --panel:#161b22; --fg:#e6edf3; --muted:#8b949e;
+            --ok:#2ea043; --warn:#d29922; --deny:#f85149; --line:#30363d; }
+    * { box-sizing: border-box; }
+    body { margin:0; font:14px/1.5 ui-sans-serif,system-ui,Segoe UI,Roboto,sans-serif;
+           background:var(--bg); color:var(--fg); }
+    header { padding:18px 24px; border-bottom:1px solid var(--line); display:flex;
+             align-items:center; gap:12px; }
+    header h1 { font-size:16px; margin:0; }
+    .badge { font-size:11px; color:var(--muted); border:1px solid var(--line);
+             padding:2px 8px; border-radius:999px; }
+    main { padding:24px; display:grid; gap:20px; grid-template-columns:1fr 1fr; }
+    .panel { background:var(--panel); border:1px solid var(--line); border-radius:10px;
+             padding:16px; overflow:auto; }
+    .panel h2 { font-size:13px; text-transform:uppercase; letter-spacing:.04em;
+                color:var(--muted); margin:0 0 12px; }
+    .full { grid-column:1 / -1; }
+    table { width:100%; border-collapse:collapse; font-size:12.5px; }
+    th,td { text-align:left; padding:6px 8px; border-bottom:1px solid var(--line);
+            white-space:nowrap; }
+    .d-executed,.d-allowed { color:var(--ok); } .d-denied,.d-failed { color:var(--deny); }
+    .d-dry_run,.d-queued { color:var(--warn); }
+    .controls { display:flex; gap:8px; margin-bottom:12px; flex-wrap:wrap; }
+    input,button { background:#0d1117; color:var(--fg); border:1px solid var(--line);
+                   border-radius:6px; padding:6px 10px; font:inherit; }
+    button { cursor:pointer; } code { color:#79c0ff; }
+    .muted { color:var(--muted); }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>Nervora <span style="color:var(--muted);font-weight:400">· Secure MCP Gateway</span></h1>
+    <span class="badge" id="env">connecting…</span>
+    <span class="badge">Internal R&amp;D Reference Architecture</span>
+  </header>
+  <main>
+    <div class="full controls">
+      <input id="base" value="http://localhost:8000" size="32" />
+      <input id="token" placeholder="paste a dev bearer token (make token ROLE=admin_agent)" size="48" />
+      <button onclick="refresh()">Refresh</button>
+      <span class="muted">Read-only console. All data comes straight from the gateway's audit + policy endpoints.</span>
+    </div>
+
+    <section class="panel"><h2>Tool registry / policies</h2>
+      <table id="tools"><thead><tr><th>tool</th><th>roles</th><th>class</th>
+        <th>mode</th><th>pii</th><th>dry-run</th><th>enabled</th></tr></thead><tbody></tbody></table>
+    </section>
+
+    <section class="panel"><h2>Queue depth</h2>
+      <div id="queue" class="muted">—</div>
+    </section>
+
+    <section class="panel full"><h2>Recent tool calls (audit)</h2>
+      <table id="calls"><thead><tr><th>time</th><th>tool</th><th>role</th>
+        <th>decision</th><th>redaction</th><th>error</th><th>latency</th><th>trace</th></tr></thead>
+        <tbody></tbody></table>
+    </section>
+  </main>
+
+  <script>
+    const $ = (s) => document.querySelector(s);
+    const base = () => $("#base").value.replace(/\/$/, "");
+    const auth = () => ({ headers: { Authorization: "Bearer " + $("#token").value } });
+
+    async function refresh() {
+      try {
+        const env = await (await fetch(base() + "/healthz")).json();
+        $("#env").textContent = `${env.env} · auth:${env.auth_mode} · queue:${env.queue_backend} · databricks:${env.databricks_mode}`;
+        const tools = await (await fetch(base() + "/tools")).json();
+        $("#tools tbody").innerHTML = tools.map(t => `<tr>
+          <td><code>${t.name}</code></td><td>${t.required_roles.join(", ")}</td>
+          <td>${t.classification}</td><td>${t.execution_mode}</td>
+          <td>${t.pii_classification}</td><td>${t.dry_run_required}</td>
+          <td>${t.enabled}</td></tr>`).join("");
+
+        const q = await (await fetch(base() + "/queue/stats", auth())).json();
+        $("#queue").textContent = JSON.stringify(q.depth_by_status || q, null, 2);
+
+        const calls = await (await fetch(base() + "/audit/tool-calls?limit=40", auth())).json();
+        $("#calls tbody").innerHTML = calls.map(c => `<tr>
+          <td class="muted">${c.created_at?.replace("T", " ").slice(0, 19)}</td>
+          <td><code>${c.tool_name}</code></td><td>${c.role}</td>
+          <td class="d-${c.decision}">${c.decision}</td><td>${c.redaction_status}</td>
+          <td>${c.error_code || ""}</td><td>${c.latency_ms} ms</td>
+          <td class="muted">${(c.trace_id || "").slice(0, 12)}</td></tr>`).join("");
+      } catch (e) { $("#env").textContent = "error: " + e.message; }
+    }
+    refresh();
+  </script>
+</body>
+</html>
