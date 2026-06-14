@@ -2,7 +2,8 @@
 
 Boots the governed execution stack and exposes:
 
-* ``GET  /healthz``                       liveness
+* ``GET  /healthz`` / ``/health``         liveness
+* ``GET  /health/ai``                     AI readiness: services + tool surface
 * ``GET  /tools``                         the published tool registry (policies)
 * ``POST /tools/{tool_name}/invoke``      the governed execution entrypoint
 * ``GET  /jobs/{job_id}``                 async job status
@@ -32,6 +33,7 @@ from tool_registry import build_default_registry
 
 from app.deps import get_principal
 from app.executor import Executor
+from app.logging_mw import JSONAccessLogMiddleware, configure_json_logging
 from app.schemas import (
     InvokeRequest,
     InvokeResponse,
@@ -57,6 +59,7 @@ def _sync_policies(settings, registry) -> None:
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     settings = get_settings()
+    configure_json_logging()
     setup_telemetry(
         service_name=settings.otel_service_name,
         otlp_endpoint=settings.otel_exporter_otlp_endpoint,
@@ -99,6 +102,10 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
+# Structured JSON access log (one line per request) — operational breadcrumbs
+# alongside the OTel spans and the durable audit trail.
+app.add_middleware(JSONAccessLogMiddleware)
+
 # Demo-only: permissive CORS so the static admin-web page can call the API.
 # In production the console is served same-origin / behind an auth proxy.
 if get_settings().is_demo:
@@ -110,11 +117,62 @@ if get_settings().is_demo:
     )
 
 
-@app.get("/healthz", tags=["ops"])
-def healthz() -> dict:
+def _liveness() -> dict:
     s = get_settings()
     return {"status": "ok", "env": s.app_env, "auth_mode": s.auth_mode,
             "queue_backend": s.queue_backend, "databricks_mode": s.databricks_mode}
+
+
+@app.get("/healthz", tags=["ops"])
+def healthz() -> dict:
+    """Liveness probe (legacy path, kept for existing orchestration)."""
+    return _liveness()
+
+
+@app.get("/health", tags=["ops"])
+def health() -> dict:
+    """Liveness probe — is the gateway process up and configured?"""
+    return _liveness()
+
+
+@app.get("/health/ai", tags=["ops"])
+def health_ai() -> dict:
+    """AI-specific readiness: backing services + the published tool surface.
+
+    Shows, deterministically, which tools are registered, which are enabled, and
+    which require human approval — the per-tool view the demo flow ends on. No
+    secrets are exposed; this is the same policy metadata as ``GET /tools``.
+    """
+    s = get_settings()
+    registry = app.state.registry
+    tools = [
+        {
+            "name": spec.name,
+            "classification": spec.classification.value,
+            "execution_mode": spec.execution_mode.value,
+            "enabled": spec.enabled,
+            "requires_approval": spec.dry_run_required or spec.requires_approval_token,
+            "required_roles": list(spec.required_roles),
+        }
+        for spec in registry.list()
+    ]
+    enabled = sum(1 for t in tools if t["enabled"])
+    return {
+        "status": "ok",
+        "env": s.app_env,
+        "services": {
+            "auth_mode": s.auth_mode,
+            "queue_backend": s.queue_backend,
+            "databricks_mode": s.databricks_mode,
+            "otel_enabled": s.otel_enabled,
+        },
+        "tools": {
+            "total": len(tools),
+            "enabled": enabled,
+            "disabled": len(tools) - enabled,
+            "registry": tools,
+        },
+    }
 
 
 @app.get("/tools", response_model=list[ToolPolicyView], tags=["tools"])

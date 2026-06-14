@@ -92,7 +92,7 @@ packages/
   audit/           SQLAlchemy schema + the only sanctioned audit writer
   pii/             Field-level + pattern-based redaction
   telemetry/       OpenTelemetry tracer setup + span helpers
-  tool_registry/   ToolSpec metadata + the 7 reference tools
+  tool_registry/   ToolSpec metadata + the reference tools (incl. demo-flow tools)
   databricks_connector/  Mock + prepared-real SQL / Jobs connector
   servicebus/      Queue abstraction: local Postgres backend + Azure Service Bus
 infra/
@@ -144,6 +144,8 @@ Details: [docs/security-model.md](docs/security-model.md).
 | `trigger_databricks_workflow` | write | **async** | – | ✅ | – | ✅ |
 | `create_crm_update_dry_run` | write (dry-run) | sync | – | – | ✅ | ✅ |
 | `execute_crm_update` | **destructive** | sync | – | – | – | ✅* |
+| `crm.lookup_customer` | read (PII) | sync | – | – | ✅ | ✅ |
+| `billing.create_invoice_draft` | write (approval) | sync | – | ✅ | – | ✅ |
 
 `*` disabled in demo mode and gated by an approval token even when enabled.
 Full matrix incl. PII class and dry-run flags: [docs/rbac-matrix.md](docs/rbac-matrix.md).
@@ -168,6 +170,7 @@ make up
 Then:
 
 - API docs (Swagger): <http://localhost:8000/docs>
+- Health: <http://localhost:8000/health> · AI readiness: <http://localhost:8000/health/ai>
 - Admin console: <http://localhost:8080>
 - Grafana: <http://localhost:3000> (anonymous admin)
 
@@ -182,11 +185,39 @@ Run the tests (SQLite-backed, no Docker needed):
 
 ```bash
 make install       # editable install incl. dev deps
-make test          # 33 tests: RBAC, PII, tools, async/idempotency, HTTP API
+make test          # RBAC, PII, tools, async/idempotency, HTTP API, demo flow
 make lint
 ```
 
 ---
+
+## Nervora demo flow
+
+> For a buyer-facing, 5-minute technical walkthrough (with example requests,
+> denied calls, the approval gate, audit output and a Mermaid diagram), see
+> [docs/demo-walkthrough.md](docs/demo-walkthrough.md).
+
+The shortest path that shows the control plane doing its job, using the two
+Phase 1 demo tools. Mint tokens with `make token ROLE=...`, then:
+
+1. **AI asks for a customer** → `POST /tools/crm.lookup_customer/invoke` as
+   `sales_agent` → **RBAC allows** it → executes → contact PII (`email`,
+   `phone`) is **redacted** in the result → an audit row is written.
+2. **Wrong role is blocked** → the same call as `finance_agent` →
+   **RBAC denies** it (`403`, `error_code: role_not_permitted`) → the *denial*
+   is also audited.
+3. **AI drafts an invoice** → `POST /tools/billing.create_invoice_draft/invoke`
+   as `finance_agent` → the **approval gate** engages: nothing is written,
+   the response is `decision: dry_run` with `human_approval_required: true`
+   and a pending `approval_id`.
+4. **A human approves** → `POST /approvals/{approval_id}/approve` as
+   `admin_agent` (only admin may approve) → the approval flips to `approved`.
+5. **Status is visible** → `GET /health/ai` shows backing-service modes and the
+   full tool surface: which tools are registered, enabled, and approval-gated.
+
+Every step returns a deterministic JSON envelope (`decision`, `result`,
+`approval_id`, `error_code`, `trace_id`) and is recorded in the audit trail —
+including the denied call. Covered end-to-end by `tests/test_demo_flow.py`.
 
 ## Demo script (5–7 min)
 
@@ -244,6 +275,9 @@ What to capture for the portfolio / inovativi.com write-up:
   documented but not fully implemented.
 
 ## Roadmap
+
+Phase 2 plan (builds on the Phase 1 controlled execution layer):
+[docs/phase-2.md](docs/phase-2.md). Highlights:
 
 - Real Databricks connector implementation + integration tests behind a flag.
 - KEDA queue-length autoscaling for the worker on Container Apps.

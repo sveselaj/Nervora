@@ -28,7 +28,7 @@ class ToolRegistry:
 
 
 def build_default_registry(*, demo_mode: bool = True) -> ToolRegistry:
-    """Build the registry with the seven reference tools.
+    """Build the registry with the reference tools.
 
     ``demo_mode`` flips the destructive ``execute_crm_update`` tool off so it is
     hard-denied regardless of role/approval — the safe default for a public
