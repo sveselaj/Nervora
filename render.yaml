@@ -1,0 +1,105 @@
+# Nervora — Secure MCP Gateway · Render Blueprint
+# -----------------------------------------------------------------------------
+# One-click deploy of the demo stack on Render, backed by a Neon Postgres DB.
+#
+# What this provisions:
+#   * nervora-gateway  — FastAPI gateway (web service, Docker)
+#   * nervora-worker   — async job worker (background worker, Docker)
+#
+# Both services share ONE Neon database (audit tables + the Postgres-backed job
+# queue) and ONE token-signing secret. The secret is generated once on the
+# gateway and shared to the worker automatically — you never type it.
+#
+# The ONLY thing you fill in by hand: DATABASE_URL, on BOTH services, in the
+# Render dashboard after the Blueprint is created (it is marked `sync: false`).
+#
+# Use the Neon connection string, with two edits:
+#   1. scheme  postgresql://  ->  postgresql+psycopg://      (psycopg v3 driver)
+#   2. use the DIRECT endpoint, not the `-pooler` one        (psycopg3 prepared
+#      statements break under Neon's transaction-mode pooler)
+#   e.g.  postgresql+psycopg://USER:PASS@ep-xxx.region.aws.neon.tech/neondb?sslmode=require
+#
+# How to deploy:
+#   1. Commit this file and push.
+#   2. Render dashboard -> New -> Blueprint -> pick this repo.
+#   3. Apply. When prompted (or afterwards, per service), paste DATABASE_URL
+#      into BOTH nervora-gateway and nervora-worker.
+#   4. Mint a token locally with the SAME secret Render generated
+#      (Render -> nervora-gateway -> Environment -> reveal DEV_TOKEN_SIGNING_SECRET):
+#        DEV_TOKEN_SIGNING_SECRET='<that-secret>' \
+#          python apps/demo-agent/agent.py token --role admin_agent
+#
+# Note: Render background workers are not on the free tier, so nervora-worker
+# uses the `starter` plan. The gateway runs on `free`. Drop the worker if you
+# only need the synchronous RBAC/PII/approval demo (the async Databricks step
+# just won't drain).
+# -----------------------------------------------------------------------------
+
+services:
+  # --- Gateway: the governed execution API ----------------------------------
+  - type: web
+    name: nervora-gateway
+    runtime: docker
+    plan: free
+    region: oregon
+    dockerfilePath: apps/mcp-gateway/Dockerfile
+    dockerContext: .
+    healthCheckPath: /healthz
+    # The container listens on 8000 (EXPOSE 8000); Render's port detection picks
+    # it up. If a deploy ever fails the port scan, uncomment the line below to
+    # bind Render's injected $PORT instead:
+    # dockerCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT --app-dir /app/apps/mcp-gateway
+    envVars:
+      - key: APP_ENV
+        value: demo
+      - key: AUTH_MODE
+        value: dev
+      - key: QUEUE_BACKEND
+        value: local
+      - key: SERVICEBUS_QUEUE_NAME
+        value: tool-jobs
+      - key: QUEUE_MAX_DELIVERY_COUNT
+        value: "5"
+      - key: DATABRICKS_MODE
+        value: mock
+      - key: OTEL_ENABLED
+        value: "false"
+      # Generated once, persisted, and shared to the worker (see fromService).
+      - key: DEV_TOKEN_SIGNING_SECRET
+        generateValue: true
+      # Paste the Neon URL (postgresql+psycopg://..., direct endpoint) here.
+      - key: DATABASE_URL
+        sync: false
+
+  # --- Worker: drains the Postgres job queue --------------------------------
+  - type: worker
+    name: nervora-worker
+    runtime: docker
+    plan: starter
+    region: oregon
+    dockerfilePath: apps/worker/Dockerfile
+    dockerContext: .
+    envVars:
+      - key: APP_ENV
+        value: demo
+      - key: AUTH_MODE
+        value: dev
+      - key: QUEUE_BACKEND
+        value: local
+      - key: SERVICEBUS_QUEUE_NAME
+        value: tool-jobs
+      - key: QUEUE_MAX_DELIVERY_COUNT
+        value: "5"
+      - key: DATABRICKS_MODE
+        value: mock
+      - key: OTEL_ENABLED
+        value: "false"
+      # Same signing secret as the gateway — pulled in automatically.
+      - key: DEV_TOKEN_SIGNING_SECRET
+        fromService:
+          type: web
+          name: nervora-gateway
+          envVarKey: DEV_TOKEN_SIGNING_SECRET
+      # Paste the SAME Neon URL here as on the gateway.
+      - key: DATABASE_URL
+        sync: false
